@@ -1,0 +1,21 @@
+# Normalize line endings so that different machines' core.autocrlf settings cannot make the committed content inconsistent.
+# Critical: shell/python scripts must be committed with LF, otherwise on Linux the \r causes errors such as
+#       `env: 'bash\r': No such file or directory`.
+* text=auto eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.txt  text eol=lf
+*.csv  text eol=lf
+# Binary: no line-ending conversion at all
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.pt   binary
+*.ckpt binary
+*.pth  binary
+*.mhd  binary
+*.zraw binary

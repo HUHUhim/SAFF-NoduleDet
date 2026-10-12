@@ -1,0 +1,33 @@
+# —— Artifacts and run outputs (never committed: large, and they are local/server paths and raw results) ——
+outputs*/
+runs/
+results_package/
+analysis_cotr3d/
+candidate_sampling/
+saff_experiments/
+logs/
+*.log
+
+# —— Checkpoints and model weights (the paper requires the code, not the weights, to ship with the package) ——
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# —— Datasets (LUNA16 must not be redistributed) ——
+LUNA16/
+subset_data/
+seg-lungs-LUNA16/
+
+# —— Pre-cleaning backups (contain old path strings, must not be committed) ——
+*.bak_anon
+
+# —— Python / editor noise ——
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db

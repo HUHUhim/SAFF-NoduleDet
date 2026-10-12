@@ -1,0 +1,62 @@
+# ⚠️ Early-version config (batch size 1 + gradient accumulation 4) —— do NOT use to reproduce the paper's final results.
+# The authoritative config for Tables 4/6/7 of the paper is configs/rerun_4090_final.yaml (batch 16, no gradient accumulation, AdamW 4e-4).
+# This file is kept only for reproducing early experiments and the scripts' default parameters; for a formal run, explicitly override the CONFIG environment variable or pass --config.
+seed: 20260612
+
+data:
+  luna_root: /root/autodl-tmp/LUNA16
+  scan_root: /root/autodl-tmp/LUNA16/subset_data
+  output_root: /root/autodl-tmp/SAFF_ws/SAFF_revision/outputs_revision
+  patch_size: 96
+  hu_min: -1200
+  hu_max: 600
+  normalization_mode: regional
+  regional_regions: 5
+  lobe_mask_root:
+  lung_mask_root: /root/autodl-tmp/LUNA16/seg-lungs-LUNA16
+  train_negatives_per_positive: 4
+  eval_negatives_per_scan: 1200
+  eval_include_all_positive_candidates: true
+  eval_seed_offset: 0
+  cache_volumes: 2
+  num_folds: 10
+  fold_strategy: official10
+  val_fraction_from_train_pool: 0.125
+  center_jitter_mm: 6.0
+
+training:
+  epochs: 80
+  batch_size: 1
+  grad_accum_steps: 4
+  lr: 0.0002
+  weight_decay: 0.0001
+  num_workers: 4
+  cpu_threads: 12
+  amp: true
+  early_stop_patience: 18
+  save_every: 0
+  compile: false
+  deterministic: false
+
+model:
+  base_channels: 24
+  local_channels: 192
+  global_channels: 192
+  fusion_channels: 256
+  global_token_grid: 6
+  full_attention_token_grid: 8
+  transformer_depth: 3
+  transformer_heads: 6
+  swin_adapted_heads: 8
+  dropout: 0.10
+  distill_weight: 0.10
+  gate_smooth_weight: 0.005
+
+eval:
+  fp_targets: [0.125, 0.25, 0.5, 1, 2, 4, 8]
+  hit_radius_scale: 0.5
+  min_hit_radius_mm: 3.0
+  plot: true
+
+experiments:
+  main_models: [saff_noduledet, unet3d, swin_unetr, convnext3d, cotr3d]

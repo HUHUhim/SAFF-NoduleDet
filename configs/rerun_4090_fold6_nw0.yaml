@@ -1,0 +1,122 @@
+# Rerun-specific config: consistent with the paper protocol, adjusting only speed-related items that "do not change the evaluation protocol".
+#
+# Differences from configs/p0_4090.yaml (must be written into the paper methodology, or at least explained in the reply letter):
+#   1. training.eval_every: 5     —— validation changed from once per epoch to once every 5 epochs (epochs 1 and the last epoch are always validated).
+#                                    Only affects model selection (the search grid for best.pt); the test folds are still evaluated once and the protocol is unchanged.
+#   2. data.eval_sort_by_scan: true —— evaluation candidates sorted by scan, so that the volume cache hits (each scan is loaded only once).
+#                                    FROC/CPM are independent of candidate order, so the metrics are exactly equivalent.
+#   3. data.val_negatives_per_scan: 600 —— validation negative candidates halved (affects best.pt selection only);
+#                                    the test stage is still 1200/scan, consistent with the paper protocol.
+#   4. data.preload_in_ram: true  —— the CT volumes used by each fold are normalized once and kept resident in memory, shared by DataLoader workers via
+#                                    fork (this machine has 1 TB of RAM). Sample loading drops from "read whole volume + normalize whole volume (~1 s)"
+#                                    to "slice crop (~milliseconds)"; this is the key to completing the rerun within budget.
+#   5. training.num_workers: 6    —— evaluation is I/O-bound, and more workers speed it up markedly (up to 8~12 when memory permits).
+#
+# Key protocol that stays unchanged: patch 96^3, HU [-1200,600], lung-field-mask axial five-region normalization, 4 negatives per positive,
+#   at most 1200 negative candidates per scan at test time, batch size 16 (no gradient accumulation), AdamW 4e-4, 80 epochs, 3mm deduplication, FROC/CPM protocol.
+
+seed: 20260612
+
+data:
+  luna_root: /root/autodl-tmp/LUNA16
+  scan_root: /root/autodl-tmp/LUNA16/subset_data
+  output_root: /root/autodl-tmp/SAFF_ws/SAFF_rerun/outputs_rerun
+  patch_size: 96
+  hu_min: -1200
+  hu_max: 600
+  normalization_mode: regional
+  regional_regions: 5
+  lobe_mask_root:
+  lung_mask_root: /root/autodl-tmp/LUNA16/seg-lungs-LUNA16
+  train_negatives_per_positive: 4
+  eval_negatives_per_scan: 1200
+  val_negatives_per_scan: 600
+  eval_include_all_positive_candidates: true
+  eval_seed_offset: 0
+  eval_sort_by_scan: true
+  preload_in_ram: true
+  preload_budget_fraction: 0.7
+  # [Memory-constrained] Preload only the 189 val+test scans (≈51 GB); train is no longer preloaded.
+  # Measured (2026-09-16 01:4x): the bulk of memory is not the preloaded volumes but the fixed overhead of
+  # [about 6 GB per DataLoader worker] —— preloading cut from 89.5 GB to 15.4 GB lowered the peak only from 125.3 GB to 123.3 GB.
+  # And 3 loaders × 6 workers = at most 18 workers ≈ 105 GB, which pushes the 120 GiB straight to 97%.
+  # With train_scan_block_shuffle below, training already reads each scan only once per epoch, so preloading is unnecessary;
+  # preloading is most valuable for val/test, which "reuse the same scan for a whole pass in one go".
+  preload_max_volumes: 190
+  # [Required under memory constraints] immediately issue posix_fadvise(DONTNEED) after reading each .raw to drop the page cache.
+  # Because page cache counts toward the cgroup's memory.current, and Linux lets it greedily fill free memory
+  # → memory.current sits at 100% for long periods → triggering the [host-side] OOM killer: this cgroup's oom_kill
+  # count is 0 (it is recorded in the parent cgroup, invisible inside the container), and that is exactly how training was killed on 2026-09-16 02:53
+  # (at the time anon was actually only 60 GB / 128.8 GB). memory.high is read-only in this container, so no soft limit can be set.
+  drop_page_cache: true
+  resample_train_each_epoch: true
+  # [Required under memory constraints] shuffle the training samples in scan-based blocks, so that "all samples of the same scan" form one batch,
+  # and hence that scan's volume is loaded+normalized only once per epoch by a single worker.
+  # Measured: this machine's cgroup limit is only 120 GiB, which cannot hold 888 float32 normalized volumes (about 240 GB),
+  # and a single "read whole volume + normalize" takes 1.02 s (read 0.089 s, normalize 0.927 s).
+  # With the default fully random shuffle + 6 workers with round-robin dispatch, the same volume is loaded once by each of the 6 workers
+  # → 4604 loads per epoch ≈ 17 h/fold, making training infeasible; once enabled it drops to 699 loads/epoch (about 119 s/epoch,
+  # entirely hidden behind the GPU compute of 141 s/epoch).
+  # The sample set/content/loss/per-sample forward pass are completely unchanged; only the within-epoch sample order changes (must be written into the methodology).
+  train_scan_block_shuffle: true
+  cache_volumes: 2
+  num_folds: 10
+  fold_strategy: official10
+  val_fraction_from_train_pool: 0.125
+  center_jitter_mm: 6.0
+
+training:
+  epochs: 80
+  batch_size: 16
+  grad_accum_steps: 1
+  lr: 0.0004
+  weight_decay: 0.0001
+  # Number of training workers. Measured comparison (2026-09-16, full 888 cases, 1 epoch):
+  #   4 workers → training epoch 335 s (workers only 33–36% CPU, clearly waiting on disk)
+  #   8 workers → training epoch 190 s (1.76×), aggregate read bandwidth about 489 MB/s, already close to the disk limit
+  # Adding more brings little further gain (training is I/O-bound), so 8 was chosen. Measured worker memory is about 1.5 GB each.
+  num_workers: 0
+  # Number of workers for the evaluation loader (non-persistent; they exit once evaluation finishes, to avoid occupying memory for the whole fold).
+  # The val/test volumes are already preloaded, so the workers only perform slice cropping; 2 is enough to overlap cropping with the GPU forward pass.
+  eval_num_workers: 2
+  cpu_threads: 12
+  amp: true
+  early_stop_patience: 0
+  eval_every: 5
+  save_every: 0
+  compile: false
+  deterministic: false
+
+model:
+  base_channels: 24
+  local_channels: 192
+  global_channels: 192
+  fusion_channels: 256
+  global_token_grid: 6
+  full_attention_token_grid: 8
+  transformer_depth: 3
+  transformer_heads: 6
+  swin_adapted_heads: 8
+  dropout: 0.10
+  head_pool: center
+  head_center_frac: 0.25
+  distill_weight: 0.10
+  gate_smooth_weight: 0.005
+
+eval:
+  fp_targets: [0.125, 0.25, 0.5, 1, 2, 4, 8]
+  hit_radius_scale: 0.5
+  min_hit_radius_mm: 3.0
+  plot: true
+
+experiments:
+  main_models: [saff_noduledet, unet3d, swin_unetr, convnext3d, cotr3d]
+  ablations:
+    - full
+    - no_distill
+    - no_morph_gate
+    - fixed_fusion
+    - global_norm
+    - cnn_only
+    - transformer_only
+    - full_attention
